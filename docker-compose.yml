@@ -1,0 +1,117 @@
+services:
+  nginx:
+    image: bholt_nginx
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/www/bho.lt:/var/www/bho.lt
+#      - /opt/botoholt/nginx/shazam-www:/var/www/shazam.bho.lt
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.10
+  redis:
+    image: redis:latest
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.11
+  mongodb:
+    image: mongo:latest
+    volumes:
+      - /opt/botoholt/mongodb:/data/db
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.12
+  web_api:
+#    image: bholt_webapi
+    build:
+      context: ./web_api
+      dockerfile: Dockerfile
+    ports:
+      - "2999:2999"
+      - "3000:3000"
+    volumes:
+      - ./web_api/v1:/usr/src/app
+      - bholt_web_api_node_modules:/usr/src/app/node_modules
+    depends_on:
+      - redis
+      - mongodb
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.20
+  shazam_api:
+#    image: bholt_shazam
+    build:
+      context: ./shazam_api
+      dockerfile: Dockerfile
+    volumes:
+      - ./shazam_api:/usr/src/app
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.21
+  bholt_twitch:
+#    image: bholt_twitch
+    build:
+      context: ./bot_twitch
+      dockerfile: Dockerfile
+    volumes:
+      - ./bot_twitch/bot:/usr/src/app
+      - bholt_twitch_node_modules:/usr/src/app/node_modules
+    restart: always
+    depends_on:
+      - redis
+      - mongodb
+      - web_api
+    networks:
+      network:
+        ipv4_address: 172.18.0.22
+  da_api:
+#    image: bholt_da
+    build:
+      context: ./da_api
+      dockerfile: Dockerfile
+    volumes:
+      - ./da_api/app:/usr/src/app
+      - bholt_da_api_node_modules:/usr/src/app/node_modules
+    depends_on:
+      - redis
+      - mongodb
+      - web_api
+    restart: always
+    networks:
+      network:
+        ipv4_address: 172.18.0.23
+  chernorabochy:
+#    image: chernorabochy
+    build:
+      context: ./chernorabochy
+      dockerfile: Dockerfile
+    depends_on:
+      - mongodb
+    restart: always
+    volumes:
+      - ./chernorabochy/media_followers:/usr/src/app
+    networks:
+      network:
+        ipv4_address: 172.18.0.24
+
+networks:
+  network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/24
+          gateway: 172.18.0.1
+
+volumes:
+  bholt_twitch_node_modules:
+  bholt_da_api_node_modules:
+  bholt_web_api_node_modules:

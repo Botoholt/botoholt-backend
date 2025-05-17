@@ -1,0 +1,22 @@
+{
+  "dependencies": {
+    "cors": "^2.8.5",
+    "deep-object-diff": "^1.1.9",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "express-validator": "^7.0.1",
+    "mongodb": "^4.9.0",
+    "passport": "^0.6.0",
+    "passport-oauth": "^1.0.0",
+    "redis": "^4.5.1",
+    "socket.io": "^4.6.1"
+  },
+  "prettier": {
+    "trailingComma": "es5",
+    "tabWidth": 4,
+    "semi": false,
+    "singleQuote": true,
+    "printWidth": 120
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "name": "bot_twitch_dev",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "bot.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@twurple/api": "^7.0.1",
+    "@twurple/auth": "^7.0.1",
+    "@twurple/chat": "^7.0.1",
+    "@twurple/eventsub-ws": "^7.0.1",
+    "@twurple/pubsub": "^7.0.1",
+    "dotenv": "^16.3.1",
+    "mongodb": "^5.7.0",
+    "redis": "^4.6.7"
+  },
+  "prettier": {
+    "trailingComma": "es5",
+    "tabWidth": 4,
+    "semi": false,
+    "singleQuote": true,
+    "printWidth": 120
+  }
+}
