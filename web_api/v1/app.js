@@ -1,4 +1,6 @@
 require('dotenv').config()
+const fs = require('fs/promises')
+const path = require('path')
 let express = require('express')
 let session = require('express-session')
 let MongoClient = require('mongodb').MongoClient
@@ -38,6 +40,106 @@ app.set('base', '/api/v1/')
 const timeStamp = (message) => {
     console.log('[' + new Date().toISOString().substring(0, 23) + '] -', message)
 }
+
+let twitchApiAccessToken = process.env.TWITCH_API_AUTH_TOKEN
+let twitchApiRefreshToken = process.env.TWITCH_API_REFRESH_TOKEN
+let twitchApiRefreshPromise = null
+
+function getTwitchApiHeaders() {
+    return {
+        Authorization: `Bearer ${twitchApiAccessToken}`,
+        'Client-Id': process.env.TWITCH_API_CLIENT_ID,
+    }
+}
+
+function isTwitchHelixAuthError(payload, status) {
+    return status === 401 || payload?.error === 'Unauthorized' || payload?.status === 401
+}
+
+async function persistTwitchApiTokensToEnv() {
+    const envPath = path.join(__dirname, '.env')
+    let content = await fs.readFile(envPath, 'utf8')
+    const upsertEnvVar = (key, value) => {
+        const line = `${key}='${value.replace(/'/g, "'\\''")}'`
+        const pattern = new RegExp(`^${key}=.*$`, 'm')
+        content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`
+    }
+    upsertEnvVar('TWITCH_API_AUTH_TOKEN', twitchApiAccessToken)
+    if (twitchApiRefreshToken) {
+        upsertEnvVar('TWITCH_API_REFRESH_TOKEN', twitchApiRefreshToken)
+    }
+    await fs.writeFile(envPath, content)
+}
+
+async function refreshTwitchApiToken() {
+    if (twitchApiRefreshPromise) {
+        return twitchApiRefreshPromise
+    }
+
+    twitchApiRefreshPromise = (async () => {
+        const refreshToken = twitchApiRefreshToken || process.env.TWITCH_API_REFRESH_TOKEN
+        const clientSecret = process.env.TWITCH_API_CLIENT_SECRET || process.env.TWITCH_SECRET
+        if (!refreshToken) {
+            throw new Error('TWITCH_API_REFRESH_TOKEN is not set')
+        }
+
+        timeStamp('refreshTwitchApiToken: refreshing Twitch API access token')
+        const body = new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: process.env.TWITCH_API_CLIENT_ID,
+            client_secret: clientSecret,
+        })
+
+        const response = await fetch('https://id.twitch.tv/oauth2/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body,
+        })
+        const tokenData = await response.json()
+        if (!response.ok) {
+            timeStamp(`refreshTwitchApiToken: failed — ${JSON.stringify(tokenData)}`)
+            throw new Error(tokenData.message || 'Twitch API token refresh failed')
+        }
+
+        twitchApiAccessToken = tokenData.access_token
+        process.env.TWITCH_API_AUTH_TOKEN = tokenData.access_token
+        if (tokenData.refresh_token) {
+            twitchApiRefreshToken = tokenData.refresh_token
+            process.env.TWITCH_API_REFRESH_TOKEN = tokenData.refresh_token
+        }
+
+        try {
+            await persistTwitchApiTokensToEnv()
+        } catch (error) {
+            timeStamp(`refreshTwitchApiToken: token refreshed but failed to persist .env — ${error.message}`)
+        }
+
+        timeStamp('refreshTwitchApiToken: success')
+        return twitchApiAccessToken
+    })().finally(() => {
+        twitchApiRefreshPromise = null
+    })
+
+    return twitchApiRefreshPromise
+}
+
+async function fetchTwitchHelix(url, retried = false) {
+    const response = await fetch(url, { headers: getTwitchApiHeaders() })
+    const payload = await response.json()
+
+    if (isTwitchHelixAuthError(payload, response.status)) {
+        if (!retried) {
+            timeStamp(`fetchTwitchHelix: auth error for ${url}, refreshing token`)
+            await refreshTwitchApiToken()
+            return fetchTwitchHelix(url, true)
+        }
+        throw new Error(`Twitch Helix auth failed after token refresh: ${JSON.stringify(payload)}`)
+    }
+
+    return payload
+}
+
 /**
  * Botoholt admin panel endpoints
  * Authentication and management
@@ -837,41 +939,58 @@ setInterval(async () => {
 }, 60000)
 
 async function getMainPageStreams() {
+    timeStamp('getMainPageStreams: start')
     let streams = await dbc.db('botSettings').collection('streams').find().toArray()
+    timeStamp(`getMainPageStreams: loaded ${streams.length} streams from DB`)
 
     const chunkSize = 100,
     chunks = []
     for (let i = 0; i < Math.ceil(streams.length / chunkSize); i++) {
         chunks[i] = streams.slice(i * chunkSize, (i + 1) * chunkSize)
     }
+    timeStamp(`getMainPageStreams: ${chunks.length} chunk(s) of up to ${chunkSize} ids`)
 
     let map = new Map()
     let fullUserData = [],
         fullChannelData = [],
         fullStreamData = []
-    for (let chunk of chunks) {
-        // console.log(chunk)
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex++) {
+        let chunk = chunks[chunkIndex]
         let idis = chunk.map((a) => a.id)
+        timeStamp(
+            `getMainPageStreams: chunk ${chunkIndex + 1}/${chunks.length}, ${idis.length} ids, sample=${JSON.stringify(idis.slice(0, 3))}`
+        )
 
         let urlUserData = `https://api.twitch.tv/helix/users?id=${idis.join('&id=')}`
         let urlChannelData = `https://api.twitch.tv/helix/channels?broadcaster_id=${idis.join('&broadcaster_id=')}`
         let urlStreamData = `https://api.twitch.tv/helix/streams?user_id=${idis.join('&user_id=')}`
 
-        let headers = {
-            Authorization: `Bearer ${process.env.TWITCH_API_AUTH_TOKEN}`,
-            'Client-Id': process.env.TWITCH_API_CLIENT_ID,
-        }
-
         let [userData, channelData, streamData] = await Promise.all([
-            fetch(urlUserData, { headers }).then((resp) => resp.json()),
-            fetch(urlChannelData, { headers }).then((resp) => resp.json()),
-            fetch(urlStreamData, { headers }).then((resp) => resp.json()),
+            fetchTwitchHelix(urlUserData),
+            fetchTwitchHelix(urlChannelData),
+            fetchTwitchHelix(urlStreamData),
         ])
+
+        const logApiResponse = (label, payload) => {
+            const data = payload?.data
+            timeStamp(
+                `getMainPageStreams: ${label} keys=${Object.keys(payload || {}).join(',')}, data type=${typeof data}, isArray=${Array.isArray(data)}, length=${Array.isArray(data) ? data.length : 'n/a'}`
+            )
+            if (!Array.isArray(data)) {
+                timeStamp(`getMainPageStreams: ${label} NOT iterable — full response: ${JSON.stringify(payload)}`)
+            }
+        }
+        logApiResponse('userData', userData)
+        logApiResponse('channelData', channelData)
+        logApiResponse('streamData', streamData)
 
         fullUserData.push(...userData.data)
         fullChannelData.push(...channelData.data)
         fullStreamData.push(...streamData.data)
     }
+    timeStamp(
+        `getMainPageStreams: merged ${fullUserData.length} users, ${fullChannelData.length} channels, ${fullStreamData.length} streams`
+    )
     fullUserData.forEach((item) => map.set(parseInt(item.id), item))
     streams.forEach((item) => {
         if (map.get(item.id)) {

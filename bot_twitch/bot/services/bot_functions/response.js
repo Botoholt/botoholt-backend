@@ -51,22 +51,23 @@ async function sayOld(client, channel, tags) {
 
         const data = await response.json();
 
-        if (data[0].data.targetUser.relationship.cumulativeTenure.months == 0) {
-            client.say(channel, `${tags.get('display-name')}, ты миниписька SUBprise`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 1) {
-        client.say(
-            channel,
-            `${tags.get('display-name')} алло, дядя. Ты микрохуй BloodTrail`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 6) {
-            client.say(channel, `${tags.get('display-name')}, ты среднехуй BloodTrail`);
+        // if (data[0].data.targetUser.relationship.cumulativeTenure.months == 0) {
+        //     client.say(channel, `${tags.get('display-name')}, ты миниписька SUBprise`);
+        // } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 1) {
+        // client.say(
+        //     channel,
+        //     `${tags.get('display-name')} алло, дядя. Ты микрохуй BloodTrail`);
+        // } else 
+        if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 3) {
+            client.say(channel, `${tags.get('display-name')}, ты кто такой сука Casino`);
         } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 12) {
-            client.say(channel, `${tags.get('display-name')}, ты хуй BloodTrail`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 24) {
-            client.say(channel, `${tags.get('display-name')}, ты мегахуй BloodTrail`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 36) {
-            client.say(channel, `${tags.get('display-name')}, ты гигахуй BloodTrail`);
+            client.say(channel, `${tags.get('display-name')}, ты не олд PoroSad`);
+        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 23) {
+            client.say(channel, `${tags.get('display-name')}, ты биг smurftvBig`);
+        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 41) {
+            client.say(channel, `${tags.get('display-name')}, ты ультра биг EZ`);
         } else {
-            client.say(channel, `${tags.get('display-name')}, ты альфахуй BloodTrail`);
+            client.say(channel, `${tags.get('display-name')}, олды на месте POGGIES`);
         }
     } catch (error) {
         console.error('Error:', error);

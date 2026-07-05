@@ -35,14 +35,10 @@ async function extractWebSocketLink(url) {
         const lines = sourceCode.split('\n')
 
         // Find the line with the socket.io connection and extract the link
+        // Format: socketHost: 'wss://socket7.donationalerts.com:443'
         for (const line of lines) {
-            if (line.includes("socket = io('wss://")) {
-                // Use regex to extract the WebSocket URL
-                const match = line.match(/wss:\/\/[^']+/)
-                if (match) {
-                    return match[0] // Returns wss://socket11.donationalerts.com:443
-                }
-            }
+            const match = line.match(/wss:\/\/[^']+/)
+            if (match) return match[0]
         }
 
         return 'WebSocket link not found'
@@ -53,10 +49,11 @@ async function extractWebSocketLink(url) {
 }
 
 async function createSocketConnection(channel, token, chanDb) {
-    let targetWidget = 'https://www.donationalerts.com/widget/lastdonations?token=' + token
+    let targetWidget = 'https://www.donationalerts.com/widget/alerts?group_id=1&token=' + token
+    timeStamp(`Target widget for channel ${channel}: ${targetWidget}`)
 
     let wsLink = await extractWebSocketLink(targetWidget)
-
+    //timeStamp(`WebSocket link for channel ${channel}: ${wsLink}`)
     if (wsLink && wsLink == 'WebSocket link not found') {
         timeStamp(`WebSocket link not found for channel ${channel}`)
         return
@@ -66,9 +63,10 @@ async function createSocketConnection(channel, token, chanDb) {
 
     const socket = io(wsLink, {
         reconnection: true,
-        reconnectionDelayMax: 15000,
-        reconnectionDelay: 10000,
-        // transports: ["websocket"]
+        reconnectionDelayMax: 40 * 1000,
+        reconnectionDelay: 2 * 1000,
+        timeout: 30 * 1000,
+        //transports: ["websocket"]
     })
 
     let infa = JSON.parse(await redisClient.get(channel))
