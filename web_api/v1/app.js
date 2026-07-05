@@ -1676,7 +1676,21 @@ app.get('/:channel', async function (req, res) {
         res.status(404).send({ message: 'not found' })
         return
     }
-    res.send(JSON.parse(await redisClient.get(channel)))
+    // If the queue blob doesn't exist yet (channel hasn't streamed with DA
+    // since Redis was last recreated), return an empty queue instead of null —
+    // the frontend can't handle a null body.
+    const queue = JSON.parse(await redisClient.get(channel))
+    res.send(
+        queue || {
+            isPlaying: false,
+            nowPlayingName: null,
+            nowPlayingLink: null,
+            nowPlayingStartsFrom: null,
+            nowPlayingDuration: null,
+            nowPlayingOwner: null,
+            queueList: [],
+        }
+    )
 })
 
 app.listen(process.env.PORT, function () {

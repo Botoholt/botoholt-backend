@@ -15,6 +15,10 @@ services:
   redis:
     # Pin to the major version currently deployed (check: docker compose exec redis redis-server --version)
     image: redis:8
+    # Persist queue state and sessions across container recreation
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
     restart: always
 
   mongodb:
@@ -101,3 +105,6 @@ services:
     depends_on:
       - mongodb
     restart: always
+
+volumes:
+  redis_data:
