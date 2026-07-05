@@ -243,6 +243,14 @@ async function initWsConnection(stream) {
     // console.log(`Raw token data for ${stream.channel}:`, JSON.stringify(token, null, 2));
 
     if (token && token.settings && token.settings.token) {
+        // Acknowledge right away: the admin toggle in web_api only waits 5s,
+        // while connecting involves a 2s sleep plus scraping the DA widget
+        // page. If the connection attempt fails, the 60s startupInit loop
+        // retries it, so an early ack is safe.
+        redisClient.publish(
+            '_datalink',
+            JSON.stringify({ service: 'da_api', action: 'start_success', channel: stream.channel })
+        )
         await sleep(2000)
         let savedInfo = await redisClient.get(stream.channel)
         if (!savedInfo) {
@@ -261,12 +269,14 @@ async function initWsConnection(stream) {
         }
         // console.log(`Found valid token for ${stream.channel}: ${token.settings.token}`);
         const socket = await createSocketConnection(stream.channel, token.settings.token, stream.db)
-        console.log(`Created socket connection for channel ${stream.channel}`)
-        socketConnections.set(stream.channel, socket)
-        redisClient.publish(
-            '_datalink',
-            JSON.stringify({ service: 'da_api', action: 'start_success', channel: stream.channel })
-        )
+        if (socket) {
+            console.log(`Created socket connection for channel ${stream.channel}`)
+            socketConnections.set(stream.channel, socket)
+        } else {
+            // Leave the channel out of socketConnections so the 60s
+            // startupInit loop retries the connection.
+            timeStamp(`Could not create DA socket for ${stream.channel}, will retry`)
+        }
     } else {
         console.log(`Invalid or missing token for ${stream.channel}. Token object:`, token)
         redisClient.publish(
@@ -279,18 +289,20 @@ async function initWsConnection(stream) {
 }
 
 async function dropWsConnection(channel) {
+    // Idempotent: acknowledge the stop even when no socket exists for the
+    // channel (stream offline or da_api restarted since the connection was
+    // made), otherwise the admin toggle in web_api times out with a 409.
     const socket = socketConnections.get(channel)
     if (socket) {
         socket.disconnect()
         socketConnections.delete(channel)
-        clearInterval(conCheck[channel])
-        redisClient.publish(
-            '_datalink',
-            JSON.stringify({ service: 'da_api', action: 'stop_success', channel: channel })
-        )
-        return true
     }
-    return false
+    clearInterval(conCheck[channel])
+    redisClient.publish(
+        '_datalink',
+        JSON.stringify({ service: 'da_api', action: 'stop_success', channel: channel })
+    )
+    return Boolean(socket)
 }
 
 async function startupInit(recheck) {
