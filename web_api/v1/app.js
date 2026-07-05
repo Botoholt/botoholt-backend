@@ -892,7 +892,9 @@ async function getMainPageStreams() {
     fullUserData.forEach((item) => map.set(parseInt(item.id), item))
     streams.forEach((item) => {
         if (map.get(item.id)) {
-            map.set(item.id, { ...map.get(item.id), followersCount: item.followersCount })
+            // Coalesce to 0 — a failed chernorabochy sync can leave nulls in the
+            // DB, and the frontend calls .toString() on this field.
+            map.set(item.id, { ...map.get(item.id), followersCount: item.followersCount ?? 0 })
             let channel = fullChannelData.find((obj) => parseInt(obj['broadcaster_id']) === item.id)
             let unusedZalupa = ['broadcaster_id', 'broadcaster_login', 'broadcaster_name', 'is_branded_content']
             unusedZalupa.forEach((key) => {
