@@ -20,7 +20,7 @@ services:
   mongodb:
     # Pin to the major version currently deployed (check: docker compose exec mongodb mongod --version).
     # Downgrading a major version against existing data files will fail to start.
-    image: mongo:8
+    image: mongo:7
     volumes:
       - /opt/botoholt/mongodb:/data/db
     restart: always
