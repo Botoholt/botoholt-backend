@@ -1,6 +1,5 @@
 services:
   nginx:
-    image: bholt_nginx
     build:
       context: ./nginx
       dockerfile: Dockerfile
@@ -9,109 +8,96 @@ services:
       - "443:443"
     volumes:
       - /var/www/bho.lt:/var/www/bho.lt
-#      - /opt/botoholt/nginx/shazam-www:/var/www/shazam.bho.lt
+    depends_on:
+      - web_api
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.10
+
   redis:
-    image: redis:latest
+    # Pin to the major version currently deployed (check: docker compose exec redis redis-server --version)
+    image: redis:8
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.11
+
   mongodb:
-    image: mongo:latest
+    # Pin to the major version currently deployed (check: docker compose exec mongodb mongod --version).
+    # Downgrading a major version against existing data files will fail to start.
+    image: mongo:8
     volumes:
       - /opt/botoholt/mongodb:/data/db
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.12
+
   web_api:
-#    image: bholt_webapi
     build:
       context: ./web_api
       dockerfile: Dockerfile
     ports:
       - "2999:2999"
       - "3000:3000"
-    volumes:
-      - ./web_api/v1:/usr/src/app
-      - bholt_web_api_node_modules:/usr/src/app/node_modules
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      PORT_SOCK: 2999
+    env_file:
+      - path: ./web_api/v1/.env
+        required: false
     depends_on:
       - redis
       - mongodb
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.20
+
   shazam_api:
-#    image: bholt_shazam
     build:
       context: ./shazam_api
       dockerfile: Dockerfile
-    volumes:
-      - ./shazam_api:/usr/src/app
+    env_file:
+      - path: ./shazam_api/.env
+        required: false
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.21
+
   bholt_twitch:
-#    image: bholt_twitch
     build:
       context: ./bot_twitch
       dockerfile: Dockerfile
-    volumes:
-      - ./bot_twitch/bot:/usr/src/app
-      - bholt_twitch_node_modules:/usr/src/app/node_modules
-    restart: always
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+      WEB_API_BASE: http://web_api:3000
+      SONGS_BACKEND: http://shazam_api:5000/
+    env_file:
+      - path: ./bot_twitch/bot/.env
+        required: false
     depends_on:
       - redis
       - mongodb
       - web_api
-    networks:
-      network:
-        ipv4_address: 172.18.0.22
+    restart: always
+
   da_api:
-#    image: bholt_da
     build:
       context: ./da_api
       dockerfile: Dockerfile
-    volumes:
-      - ./da_api/app:/usr/src/app
-      - bholt_da_api_node_modules:/usr/src/app/node_modules
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+      REDIS_URL: redis://redis:6379
+      WEB_API_BASE: http://web_api:3000
+    env_file:
+      - path: ./da_api/app/.env
+        required: false
     depends_on:
       - redis
       - mongodb
       - web_api
     restart: always
-    networks:
-      network:
-        ipv4_address: 172.18.0.23
+
   chernorabochy:
-#    image: chernorabochy
     build:
       context: ./chernorabochy
       dockerfile: Dockerfile
+    environment:
+      MONGO_URL: mongodb://mongodb:27017
+    env_file:
+      - path: ./chernorabochy/media_followers/.env
+        required: false
     depends_on:
       - mongodb
     restart: always
-    volumes:
-      - ./chernorabochy/media_followers:/usr/src/app
-    networks:
-      network:
-        ipv4_address: 172.18.0.24
-
-networks:
-  network:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: 172.18.0.0/24
-          gateway: 172.18.0.1
-
-volumes:
-  bholt_twitch_node_modules:
-  bholt_da_api_node_modules:
-  bholt_web_api_node_modules:

@@ -13,6 +13,9 @@ const clientId = process.env.TWITCH_CLIENT_ID
 const clientSecret = process.env.TWITCH_SECRET
 const accessToken = process.env.TWITCH_ACCESS_TOKEN
 
+// Internal web_api address (Docker service name, not a hardcoded container IP)
+const webApiBase = process.env.WEB_API_BASE || 'http://web_api:3000'
+
 const authProviderChat = new StaticAuthProvider(clientId, accessToken)
 const authProviderApi = new RefreshingAuthProvider({
     clientId,
@@ -56,7 +59,7 @@ let botTokens = await cdb.db('botSettings').collection('twTokens').findOne({ cha
 await authProviderApi.addUser(botTokens['twitchId'], botTokens)
 
 let streams = await cdb.db('botSettings').collection('streams').distinct('channel', { 'services.botoholt': true })
-let streamsOnline = await fetch('http://172.18.0.20:3000/streams?all=true').then((resp) => resp.json())
+let streamsOnline = await fetch(`${webApiBase}/streams?all=true`).then((resp) => resp.json())
 // timeStamp(streams)
 // createBotInstance('smurf_tv')
 streamsOnline.forEach((stream) => {
@@ -75,7 +78,7 @@ streamsOnline.forEach((stream) => {
 setInterval(async () => {
     try {
         streams = await cdb.db('botSettings').collection('streams').distinct('channel', { 'services.botoholt': true })
-        streamsOnline = await fetch('http://172.18.0.20:3000/streams?all=true').then((resp) => resp.json())
+        streamsOnline = await fetch(`${webApiBase}/streams?all=true`).then((resp) => resp.json())
     } catch (error) {
         timeStamp(error)
         return
@@ -111,7 +114,7 @@ redisClientPS.subscribe('_datalink', async (message) => {
             return
         }
         if (message.action == 'start') {
-            if (Object.keys(botCommands).includes(message.channel)) {
+            if (!Object.keys(botCommands).includes(message.channel)) {
                 await createBotInstance(message.channel)
             }
             redisClient.publish(
@@ -194,12 +197,10 @@ async function dropBotInstance(stream) {
     timeStamp(`Stopping bot instance for ${stream}`)
     try {
         chatClient.part(stream)
-        if (botCommands.stream) {
-            if (botCommands.stream.repeat) {
-                botCommands[stream]['repeat'].forEach((intervalId) => {
-                    clearInterval(intervalId)
-                })
-            }
+        if (botCommands[stream] && botCommands[stream].repeat) {
+            botCommands[stream]['repeat'].forEach((intervalId) => {
+                clearInterval(intervalId)
+            })
         }
         delete botCommands[stream]
         delete botRewards[stream]

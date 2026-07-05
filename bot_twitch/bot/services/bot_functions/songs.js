@@ -240,6 +240,20 @@ async function lastSong(client, channel, tags, message, answersList) {
             .limit(2)
             .toArray()
             .then((result) => {
+                // result[0] is the currently playing song; result[1] is the previous one
+                if (result.length < 2) {
+                    answerProcessor({
+                        channel: channel,
+                        commandName: 'daAnswers',
+                        commandType: 'failure',
+                        userName: tags.get('display-name'),
+                        answers: answersList,
+                        bholtLink: `${process.env.BHOLT_BASE}/${channel}/`,
+                    }).then((answer) => {
+                        client.say(channel, answer)
+                    })
+                    return
+                }
                 answerProcessor({
                     channel: channel,
                     commandName: 'daAnswers',

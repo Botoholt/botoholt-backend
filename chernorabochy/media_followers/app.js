@@ -1,6 +1,6 @@
 require('dotenv').config()
 let MongoClient = require('mongodb').MongoClient
-let dbc = new MongoClient(process.env.MONGOURL)
+let dbc = new MongoClient(process.env.MONGO_URL)
 
 async function syncSocials(streams){
     

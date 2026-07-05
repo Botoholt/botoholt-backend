@@ -1,11 +1,10 @@
 require('dotenv').config()
-const fs = require('fs/promises')
-const path = require('path')
 let express = require('express')
 let session = require('express-session')
 let MongoClient = require('mongodb').MongoClient
 let ObjectId = require('mongodb').ObjectId
 let redis = require('redis')
+let RedisStore = require('connect-redis').default
 let passport = require('passport')
 let OAuth2Strategy = require('passport-oauth').OAuth2Strategy
 let cors = require('cors')
@@ -18,23 +17,27 @@ redisClient.connect()
 let redisClientPS = redis.createClient({ url: process.env.REDIS_URL })
 redisClientPS.connect()
 
-let dbc = new MongoClient(process.env.MONGOURL)
+let dbc = new MongoClient(process.env.MONGO_URL)
 let app = express()
+
+const corsOrigins = (process.env.CORS_ORIGIN || 'https://bho.lt').split(',')
 
 app.use(
     session({
+        store: new RedisStore({ client: redisClient, prefix: 'sess:' }),
         secret: process.env.SESSION_SECRET,
         resave: false,
         saveUninitialized: false,
         cookie: {
             maxAge: 30 * 24 * 60 * 60 * 1000,
+            sameSite: 'lax',
         },
     })
 )
 app.use(passport.initialize())
 app.use(passport.session())
 app.use(express.json())
-app.use(cors())
+app.use(cors({ origin: corsOrigins, credentials: true }))
 app.set('base', '/api/v1/')
 
 const timeStamp = (message) => {
@@ -56,20 +59,31 @@ function isTwitchHelixAuthError(payload, status) {
     return status === 401 || payload?.error === 'Unauthorized' || payload?.status === 401
 }
 
-async function persistTwitchApiTokensToEnv() {
-    const envPath = path.join(__dirname, '.env')
-    let content = await fs.readFile(envPath, 'utf8')
-    const upsertEnvVar = (key, value) => {
-        const line = `${key}='${value.replace(/'/g, "'\\''")}'`
-        const pattern = new RegExp(`^${key}=.*$`, 'm')
-        content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`
-    }
-    upsertEnvVar('TWITCH_API_AUTH_TOKEN', twitchApiAccessToken)
-    if (twitchApiRefreshToken) {
-        upsertEnvVar('TWITCH_API_REFRESH_TOKEN', twitchApiRefreshToken)
-    }
-    await fs.writeFile(envPath, content)
+async function persistTwitchApiTokensToDb() {
+    await dbc
+        .db('botSettings')
+        .collection('apiTokens')
+        .updateOne(
+            { name: 'twitchApi' },
+            {
+                $set: {
+                    accessToken: twitchApiAccessToken,
+                    refreshToken: twitchApiRefreshToken,
+                    obtainmentTimestamp: Date.now(),
+                },
+            },
+            { upsert: true }
+        )
 }
+
+async function loadTwitchApiTokensFromDb() {
+    const saved = await dbc.db('botSettings').collection('apiTokens').findOne({ name: 'twitchApi' })
+    if (saved) {
+        if (saved.accessToken) twitchApiAccessToken = saved.accessToken
+        if (saved.refreshToken) twitchApiRefreshToken = saved.refreshToken
+    }
+}
+loadTwitchApiTokensFromDb().catch((error) => timeStamp(`loadTwitchApiTokensFromDb: ${error.message}`))
 
 async function refreshTwitchApiToken() {
     if (twitchApiRefreshPromise) {
@@ -110,9 +124,9 @@ async function refreshTwitchApiToken() {
         }
 
         try {
-            await persistTwitchApiTokensToEnv()
+            await persistTwitchApiTokensToDb()
         } catch (error) {
-            timeStamp(`refreshTwitchApiToken: token refreshed but failed to persist .env — ${error.message}`)
+            timeStamp(`refreshTwitchApiToken: token refreshed but failed to persist to DB — ${error.message}`)
         }
 
         timeStamp('refreshTwitchApiToken: success')
@@ -364,204 +378,88 @@ app.post('/admin/lang', [body('lang').isString().notEmpty()], loggedIn, async fu
     }
 })
 
+/**
+ * Single persistent subscription to the service-control channel. Requests
+ * register waiters here instead of subscribing/unsubscribing the shared
+ * Redis client per request, which raced between concurrent requests and
+ * with the pSubscribe('*') socket.io relay on the same client.
+ */
+const datalinkWaiters = new Set()
+redisClientPS.subscribe('_datalink', (message) => {
+    let parsed
+    try {
+        parsed = JSON.parse(message)
+    } catch (error) {
+        return
+    }
+    for (let waiter of datalinkWaiters) {
+        waiter(parsed)
+    }
+})
+
+function sendServiceCommand({ service, action, channel, timeoutMs = 5000 }) {
+    return new Promise((resolve, reject) => {
+        const expectedAction = `${action}_success`
+        const timer = setTimeout(() => {
+            datalinkWaiters.delete(onMessage)
+            reject(new Error(`Timed out waiting for ${service} ${expectedAction} (${channel})`))
+        }, timeoutMs)
+        const onMessage = (message) => {
+            if (message.service === service && message.action === expectedAction && message.channel === channel) {
+                clearTimeout(timer)
+                datalinkWaiters.delete(onMessage)
+                resolve()
+            }
+        }
+        datalinkWaiters.add(onMessage)
+        redisClient.publish('_datalink', JSON.stringify({ service, action, channel }))
+    })
+}
+
 app.get('/admin/services/:service', loggedIn, async function (req, res) {
     let state = await dbc
         .db('botSettings')
         .collection('streams')
         .findOne({ id: req.user.id })
 
+    let service
+    let serviceKey
     if (req.params.service == 'botoholt') {
-        switch (state.services.botoholt) {
-            case false: {
-                let actionStatePromise = new Promise((resolve, reject) => {
-                    let waitResponse = setTimeout(function () {
-                        redisClientPS.unsubscribe('_datalink')
-                        reject('Timed out')
-                    }, 5000)
-                    redisClientPS.subscribe('_datalink', (message, channel) => {
-                        message = JSON.parse(message)
-                        if (
-                            message.action == 'start_success' &&
-                            message.service == 'bot_twitch' &&
-                            message.channel == req.user.login
-                        ) {
-                            redisClientPS.unsubscribe('_datalink')
-                            clearTimeout(waitResponse)
-                            resolve('Success')
-                        }
-                    })
-                })
-                redisClient.publish(
-                    '_datalink',
-                    JSON.stringify({ service: 'bot_twitch', action: 'start', channel: req.user.login })
-                )
-                await actionStatePromise
-                    .then(async (successMessage) => {
-                        await dbc
-                            .db('botSettings')
-                            .collection('streams')
-                            .findOneAndUpdate({ id: req.user.id }, [
-                                { $set: { 'services.botoholt': { $eq: [false, '$services.botoholt'] } } },
-                            ])
-                        req.user.services.botoholt = !req.user.services.botoholt
-                        res.status(200).json({ message: 'success' })
-                        return
-                    })
-                    .catch((e) => {
-                        timeStamp(e)
-                        res.status(409).json({ message: 'failure' })
-                        return
-                    })
-                return
-            }
-            case true: {
-                let actionStatePromise = new Promise((resolve, reject) => {
-                    redisClientPS.subscribe('_datalink', (message, channel) => {
-                        let waitResponse = setTimeout(function () {
-                            redisClientPS.unsubscribe('_datalink')
-                            reject('Timed out')
-                        }, 5000)
-                        message = JSON.parse(message)
-                        if (
-                            message.action == 'stop_success' &&
-                            message.service == 'bot_twitch' &&
-                            message.channel == req.user.login
-                        ) {
-                            // console.log('nu da i che')
-                            redisClientPS.unsubscribe('_datalink')
-                            clearTimeout(waitResponse)
-                            resolve('Success')
-                        }
-                    })
-                })
-                redisClient.publish(
-                    '_datalink',
-                    JSON.stringify({ service: 'bot_twitch', action: 'stop', channel: req.user.login })
-                )
-                await actionStatePromise
-                    .then(async (successMessage) => {
-                        // console.log('Yay ' + successMessage)
-                        await dbc
-                            .db('botSettings')
-                            .collection('streams')
-                            .findOneAndUpdate({ id: req.user.id }, [
-                                { $set: { 'services.botoholt': { $eq: [false, '$services.botoholt'] } } },
-                            ])
-                        req.user.services.botoholt = !req.user.services.botoholt
-                        res.status(200).json({ message: 'success' })
-                        return
-                    })
-                    .catch((e) => {
-                        timeStamp(e)
-                        res.status(409).json({ message: 'failure' })
-                        return
-                    })
-                return
-            }
-        }
-    }
-    if (req.params.service == 'donationalerts') {
+        service = 'bot_twitch'
+        serviceKey = 'botoholt'
+    } else if (req.params.service == 'donationalerts') {
         let tokenTelo = await dbc
             .db(req.user.id.toString())
             .collection('botSettings')
             .findOne({ settingName: 'daToken' })
-        if (tokenTelo.settings.token) {
-            switch (state.services.da_api) {
-                case false: {
-                    let actionStatePromise = new Promise((resolve, reject) => {
-                        let waitResponse = setTimeout(function () {
-                            redisClientPS.unsubscribe('_datalink')
-                            reject('Timed out')
-                        }, 5000)
-                        redisClientPS.subscribe('_datalink', (message, channel) => {
-                            message = JSON.parse(message)
-                            if (
-                                message.action == 'start_success' &&
-                                message.service == 'da_api' &&
-                                message.channel == req.user.login
-                            ) {
-                                redisClientPS.unsubscribe('_datalink')
-                                clearTimeout(waitResponse)
-
-                                resolve('Success')
-                            }
-                        })
-                    })
-                    redisClient.publish(
-                        '_datalink',
-                        JSON.stringify({ service: 'da_api', action: 'start', channel: req.user.login })
-                    )
-                    await actionStatePromise
-                        .then(async (successMessage) => {
-                            await dbc
-                                .db('botSettings')
-                                .collection('streams')
-                                .findOneAndUpdate({ id: req.user.id }, [
-                                    { $set: { 'services.da_api': { $eq: [false, '$services.da_api'] } } },
-                                ])
-                            req.user.services.da_api = !req.user.services.da_api
-                            res.status(200).json({ message: 'success' })
-                            return
-                        })
-                        .catch((e) => {
-                            timeStamp(e)
-                            res.status(409).json({ message: 'failure' })
-                            return
-                        })
-                    return
-                }
-                case true: {
-                    let actionStatePromise = new Promise((resolve, reject) => {
-                        let waitResponse = setTimeout(function () {
-                            redisClientPS.unsubscribe('_datalink')
-                            reject('Timed out')
-                        }, 5000)
-                        redisClientPS.subscribe('_datalink', (message, channel) => {
-                            message = JSON.parse(message)
-                            if (
-                                message.action == 'stop_success' &&
-                                message.service == 'da_api' &&
-                                message.channel == req.user.login
-                            ) {
-                                redisClientPS.unsubscribe('_datalink')
-                                clearTimeout(waitResponse)
-                                resolve('Success')
-                            }
-                        })
-                    })
-                    redisClient.publish(
-                        '_datalink',
-                        JSON.stringify({ service: 'da_api', action: 'stop', channel: req.user.login })
-                    )
-                    await actionStatePromise
-                        .then(async (successMessage) => {
-                            await dbc
-                                .db('botSettings')
-                                .collection('streams')
-                                .findOneAndUpdate({ id: req.user.id }, [
-                                    { $set: { 'services.da_api': { $eq: [false, '$services.da_api'] } } },
-                                ])
-                            req.user.services.da_api = !req.user.services.da_api
-                            res.status(200).json({ message: 'success' })
-                            return
-                        })
-                        .catch((e) => {
-                            timeStamp(e)
-                            res.status(409).json({ message: 'failure' })
-                            return
-                        })
-                    return
-                }
-            }
-
-            return
-        } else {
+        if (!tokenTelo.settings.token) {
             res.status(400).json({ message: "can't change state without DA token" })
             return
         }
+        service = 'da_api'
+        serviceKey = 'da_api'
+    } else {
+        res.status(400).json({ message: 'no such service' })
+        return
     }
-    res.status(400).json({ message: 'no such service' })
-    return
+
+    const action = state.services[serviceKey] ? 'stop' : 'start'
+    try {
+        await sendServiceCommand({ service, action, channel: req.user.login })
+    } catch (e) {
+        timeStamp(e)
+        res.status(409).json({ message: 'failure' })
+        return
+    }
+
+    await dbc
+        .db('botSettings')
+        .collection('streams')
+        .findOneAndUpdate({ id: req.user.id }, [
+            { $set: { [`services.${serviceKey}`]: { $eq: [false, `$services.${serviceKey}`] } } },
+        ])
+    req.user.services[serviceKey] = !req.user.services[serviceKey]
+    res.status(200).json({ message: 'success' })
 })
 
 app.get('/admin/commands/default', loggedIn, async function (req, res) {
@@ -1770,11 +1668,15 @@ app.get('/:stream/songs', async function (req, res) {
 })
 
 app.get('/:channel', async function (req, res) {
-    if (req.params.channel) {
-        res.send(JSON.parse(await redisClient.get(req.params.channel)))
-    } else {
-        res.send('')
+    // Only expose queue state for registered channels — this endpoint used to
+    // return the value of ANY Redis key to unauthenticated callers.
+    const channel = req.params.channel.toLowerCase()
+    const stream = await dbc.db('botSettings').collection('streams').findOne({ channel: channel })
+    if (!stream) {
+        res.status(404).send({ message: 'not found' })
+        return
     }
+    res.send(JSON.parse(await redisClient.get(channel)))
 })
 
 app.listen(process.env.PORT, function () {
@@ -1787,7 +1689,7 @@ app.listen(process.env.PORT, function () {
 const io = new Server({
     path: '/api/v1/socket',
     cors: {
-        origin: '*',
+        origin: corsOrigins,
         methods: ['GET', 'POST'],
     },
 })

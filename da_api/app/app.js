@@ -4,6 +4,8 @@ import io from 'socket.io-client'
 import { parse, toSeconds } from 'iso8601-duration'
 
 let da_debug = false
+// Internal web_api address (Docker service name, not a hardcoded container IP)
+const webApiBase = process.env.WEB_API_BASE || 'http://web_api:3000'
 let alerts_array = {}
 let moderated_alerts = {}
 let socketConnections = new Map() // Map to store channel -> socket connection
@@ -139,7 +141,8 @@ async function createSocketConnection(channel, token, chanDb) {
                         })
                     })
                 } catch (error) {
-                    timeStamp(`Can't add ${mediaEvent.raw}, skipping`)
+                    timeStamp(error)
+                    timeStamp(`Can't add media ${JSON.stringify(raw)}, skipping`)
                 }
             } else if (raw.action == 'play') {
                 let startedPlayingId = infa.queueList.findIndex((object) => {
@@ -210,7 +213,8 @@ async function createSocketConnection(channel, token, chanDb) {
             } else if (raw.action == 'unpause') {
                 infa.isPlaying = true
                 if (!infa.nowPlayingName) {
-                    dasockets[channel].mediaGetCurrent()
+                    // Ask the DA widget socket for the currently playing media
+                    socket.emit('media', { token: token, message_data: { action: 'get-current-media' } })
                 }
             }
             socketUpdateTimeout = setTimeout(() => {
@@ -290,7 +294,7 @@ async function dropWsConnection(channel) {
 }
 
 async function startupInit(recheck) {
-    let streamsOnline = await fetch('http://172.18.0.20:3000/streams?all=true').then((resp) => resp.json())
+    let streamsOnline = await fetch(`${webApiBase}/streams?all=true`).then((resp) => resp.json())
     let streamsEnabled = await cdb.db('botSettings').collection('streams').find({ 'services.da_api': true }).toArray()
 
     if (!recheck) {

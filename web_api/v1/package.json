@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "connect-redis": "^7.1.1",
     "cors": "^2.8.5",
     "deep-object-diff": "^1.1.9",
     "dotenv": "^16.0.3",

@@ -1,7 +1,6 @@
-FROM node:latest
+FROM node:22-slim
 WORKDIR /usr/src/app
-# VOLUME ["/usr/src/app"]
 COPY bot/package*.json ./
-RUN npm install
+RUN npm ci --omit=dev
 COPY bot/. .
 CMD [ "node", "bot.js" ]
