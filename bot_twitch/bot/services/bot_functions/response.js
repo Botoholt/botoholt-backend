@@ -19,12 +19,16 @@ function sayBrooklyn(client, channel, tags) {
 }
 
 async function sayOld(client, channel, tags) {
+    const displayName = tags.get('display-name')
+    const targetLogin = String(displayName || '').toLowerCase()
+    const channelLogin = String(channel || '').replace(/^#/, '')
+
     try {
         const response = await fetch('https://gql.twitch.tv/gql', {
             method: 'POST',
             headers: {
-                authorization: `OAuth ${process.env.TWITCH_OAUTH_TOKEN_GQL}`,
-                'client-id': process.env.TWITCH_CLIENT_ID_GQL,
+                Authorization: process.env.TWITCH_OAUTH_TOKEN_GQL,
+                'Client-Id': process.env.TWITCH_CLIENT_ID_GQL,
                 'content-type': 'application/json',
             },
             body: JSON.stringify([
@@ -32,12 +36,12 @@ async function sayOld(client, channel, tags) {
                     operationName: 'ViewerCard',
                     variables: {
                         channelID: tags.get('room-id'),
-                        channelLogin: channel,
+                        channelLogin,
                         hasChannelID: true,
-                        giftRecipientLogin: tags.get('display-name'),
+                        giftRecipientLogin: targetLogin,
                         isViewerBadgeCollectionEnabled: false,
                         withStandardGifting: false,
-                        badgeSourceChannelLogin: channel,
+                        badgeSourceChannelLogin: channelLogin,
                     },
                     extensions: {
                         persistedQuery: {
@@ -47,31 +51,42 @@ async function sayOld(client, channel, tags) {
                     },
                 },
             ]),
-        });
+        })
 
-        const data = await response.json();
+        const data = await response.json()
+        const earnedBadges = data?.[0]?.data?.channelViewer?.earnedBadges
 
-        // if (data[0].data.targetUser.relationship.cumulativeTenure.months == 0) {
-        //     client.say(channel, `${tags.get('display-name')}, ты миниписька SUBprise`);
-        // } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 1) {
-        // client.say(
-        //     channel,
-        //     `${tags.get('display-name')} алло, дядя. Ты микрохуй BloodTrail`);
-        // } else 
-        if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 3) {
-            client.say(channel, `${tags.get('display-name')}, ты кто такой сука Casino`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 12) {
-            client.say(channel, `${tags.get('display-name')}, ты не олд PoroSad`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 23) {
-            client.say(channel, `${tags.get('display-name')}, ты биг smurftvBig`);
-        } else if (data[0].data.targetUser.relationship.cumulativeTenure.months <= 41) {
-            client.say(channel, `${tags.get('display-name')}, ты ультра биг EZ`);
+        if (!Array.isArray(earnedBadges)) {
+            console.error('sayOld: no earned badges in GQL response', JSON.stringify(data))
+            client.say(channel, `${displayName} я не знаю PoroSad`)
+            return
+        }
+
+        const subscriberBadge = earnedBadges.find((badge) => badge?.setID === 'subscriber')
+        const subscriberBadgeVersion = subscriberBadge ? Number(subscriberBadge.version) : 0
+
+        if (!Number.isInteger(subscriberBadgeVersion) || subscriberBadgeVersion < 0) {
+            console.error('sayOld: invalid subscriber badge version', subscriberBadge?.version)
+            client.say(channel, `${displayName} я не знаю PoroSad`)
+            return
+        }
+
+        // Badge versions are milestones, so classify by the next available milestone
+        // rather than treating the version as an exact cumulative tenure.
+        if (subscriberBadgeVersion < 6) {
+            client.say(channel, `${displayName}, ты кто такой сука Casino`)
+        } else if (subscriberBadgeVersion < 18) {
+            client.say(channel, `${displayName}, ты не олд PoroSad`)
+        } else if (subscriberBadgeVersion < 24) {
+            client.say(channel, `${displayName}, ты биг smurftvBig`)
+        } else if (subscriberBadgeVersion < 42) {
+            client.say(channel, `${displayName}, ты ультра биг EZ`)
         } else {
-            client.say(channel, `${tags.get('display-name')}, олды на месте POGGIES`);
+            client.say(channel, `${displayName}, олды на месте POGGIES`)
         }
     } catch (error) {
-        console.error('Error:', error);
-        client.say(channel, `${tags.get('display-name')} я не знаю PoroSad`);
+        console.error('Error:', error)
+        client.say(channel, `${displayName} я не знаю PoroSad`)
     }
 }
 
